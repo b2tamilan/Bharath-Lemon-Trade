@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ta">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#2f6f3e">
+  <meta name="description" content="Lemon Trading Billing, Stock, Ledger and Profit app">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="styles.css">
+  <title>Lemon Trading V2.2</title>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div>
+      <div class="brand" id="brandName">🍋 LEMON TRADING</div>
+      <div class="subtitle">V2.2 · Billing · Stock · Ledger</div>
+    </div>
+    <div class="top-actions">
+      <button class="icon-btn" id="backupBtn" title="Backup">⬇</button>
+      <button class="icon-btn" id="moreBtn" title="More">☰</button>
+    </div>
+  </header>
+
+  <main class="content">
+    <section class="screen active" id="screen-dashboard">
+      <div class="page-title-row"><div><h1>Dashboard</h1><p id="todayLabel"></p></div></div>
+      <div class="stats-grid">
+        <div class="stat"><span>இன்றைய Sales</span><strong id="statSales">₹0</strong></div>
+        <div class="stat"><span>இன்றைய Purchase</span><strong id="statPurchase">₹0</strong></div>
+        <div class="stat"><span>Gross Profit</span><strong id="statProfit">₹0</strong></div>
+        <div class="stat"><span>Receivable</span><strong id="statReceivable">₹0</strong></div>
+        <div class="stat"><span>Payable</span><strong id="statPayable">₹0</strong></div>
+        <div class="stat"><span>Stock</span><strong id="statStock">0 kg</strong></div>
+      </div>
+      <div class="quick-grid">
+        <button class="quick green" data-action="sale">＋ Sale / Bill</button>
+        <button class="quick brown" data-action="purchase">＋ Purchase</button>
+        <button class="quick blue" data-action="payment">＋ Payment</button>
+        <button class="quick purple" data-action="expense">＋ Expense</button>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Recent Transactions</h2><button class="text-btn" data-screen="accounts">View all</button></div>
+        <div id="recentList" class="list"></div>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-sales">
+      <div class="page-title-row"><div><h1>Sales / Bills</h1><p>விற்பனை bill மற்றும் customer due</p></div><button class="primary" data-action="sale">＋ New Bill</button></div>
+      <div class="card"><input id="salesSearch" class="search" placeholder="🔎 Customer / Invoice No"><div id="salesList" class="list"></div></div>
+    </section>
+
+    <section class="screen" id="screen-purchase">
+      <div class="page-title-row"><div><h1>Purchase</h1><p>Supplier purchase & payable</p></div><button class="primary" data-action="purchase">＋ New Purchase</button></div>
+      <div class="card"><input id="purchaseSearch" class="search" placeholder="🔎 Supplier / Purchase No"><div id="purchaseList" class="list"></div></div>
+    </section>
+
+    <section class="screen" id="screen-parties">
+      <div class="page-title-row"><div><h1>Parties</h1><p>Customer / Supplier ledger</p></div><button class="primary" data-action="party">＋ Add Party</button></div>
+      <div class="tabs">
+        <button class="tab active" data-party-tab="all">All</button>
+        <button class="tab" data-party-tab="customer">Customers</button>
+        <button class="tab" data-party-tab="supplier">Suppliers</button>
+      </div>
+      <div class="card"><input id="partySearch" class="search" placeholder="🔎 Search party"><div id="partyList" class="list"></div></div>
+    </section>
+
+    <section class="screen" id="screen-stock">
+      <div class="page-title-row"><div><h1>Stock</h1><p>Stock movement, wastage & adjustments</p></div><button class="primary" data-action="wastage">＋ Wastage</button></div>
+      <div class="stats-grid stock-grid">
+        <div class="stat"><span>Opening</span><strong id="stockOpening">0 kg</strong></div>
+        <div class="stat"><span>Purchased</span><strong id="stockPurchased">0 kg</strong></div>
+        <div class="stat"><span>Sold</span><strong id="stockSold">0 kg</strong></div>
+        <div class="stat"><span>Wastage</span><strong id="stockWastage">0 kg</strong></div>
+        <div class="stat"><span>Adjustments</span><strong id="stockAdjustment">0 kg</strong></div>
+        <div class="stat"><span>Current</span><strong id="stockCurrent">0 kg</strong></div>
+      </div>
+      <div class="card"><div class="card-head"><h2>Stock Movement</h2><button class="text-btn" data-action="adjustment">Adjust</button></div><div id="stockList" class="list"></div></div>
+    </section>
+
+    <section class="screen" id="screen-accounts">
+      <div class="page-title-row"><div><h1>Accounts</h1><p>Receipts, payments & expenses</p></div><div class="action-pair"><button class="primary" data-action="payment">＋ Payment</button><button class="secondary" data-action="expense">Expense</button></div></div>
+      <div class="tabs account-tabs"><button class="tab active" data-account-tab="payments">Payments</button><button class="tab" data-account-tab="expenses">Expenses</button></div>
+      <div class="card"><div id="accountsList" class="list"></div></div>
+    </section>
+
+    <section class="screen" id="screen-reports">
+      <div class="page-title-row"><div><h1>Reports</h1><p>Period summary & outstanding</p></div><button class="secondary" id="exportCsvBtn">Export CSV</button></div>
+      <div class="card">
+        <div class="date-row"><label>From<input type="date" id="fromDate"></label><label>To<input type="date" id="toDate"></label><button class="secondary" id="runReportBtn">Run</button></div>
+      </div>
+      <div class="stats-grid report-grid">
+        <div class="stat"><span>Sales</span><strong id="repSales">₹0</strong></div><div class="stat"><span>Purchase</span><strong id="repPurchase">₹0</strong></div><div class="stat"><span>Gross Profit</span><strong id="repProfit">₹0</strong></div>
+        <div class="stat"><span>Sales Qty</span><strong id="repSalesQty">0 kg</strong></div><div class="stat"><span>Purchase Qty</span><strong id="repPurchaseQty">0 kg</strong></div><div class="stat"><span>Wastage</span><strong id="repWastage">0 kg</strong></div>
+        <div class="stat"><span>Expenses</span><strong id="repExpenses">₹0</strong></div><div class="stat"><span>Net Profit</span><strong id="repNetProfit">₹0</strong></div>
+      </div>
+      <div class="card"><div class="card-head"><h2>Outstanding</h2><button class="text-btn" id="statementAllBtn">Export Statement</button></div><div id="outstandingList" class="list"></div></div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="nav active" data-screen="dashboard">🏠<span>Home</span></button>
+    <button class="nav" data-screen="sales">🧾<span>Sales</span></button>
+    <button class="nav" data-screen="purchase">🛒<span>Purchase</span></button>
+    <button class="nav" data-screen="parties">👥<span>Parties</span></button>
+    <button class="nav" data-screen="stock">📦<span>Stock</span></button>
+    <button class="nav" data-screen="accounts">💰<span>Accounts</span></button>
+    <button class="nav" data-screen="reports">📊<span>Reports</span></button>
+  </nav>
+</div>
+
+<div class="modal" id="modal"><div class="modal-sheet"><div class="modal-head"><h2 id="modalTitle"></h2><button class="icon-btn" id="closeModal">✕</button></div><div id="modalBody"></div></div></div>
+<script src="app.js"></script>
+<script>if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));}</script>
+</body>
+</html>

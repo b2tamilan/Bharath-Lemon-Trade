@@ -1,0 +1,9 @@
+{
+  "name":"Lemon Trading V2.2",
+  "short_name":"Lemon V2.2",
+  "start_url":"./",
+  "display":"standalone",
+  "background_color":"#f5f7f5",
+  "theme_color":"#2f6f3e",
+  "description":"Mobile-first Lemon Trading Billing, Stock, Ledger and Profit app"
+}
