@@ -10,6 +10,78 @@ const today=()=>new Date().toISOString().slice(0,10);
 const fmtDate=d=>new Date(`${d}T00:00:00`).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uuid=()=>crypto.randomUUID();
+function businessProfile(){
+  const s=state.cache.settings&&typeof state.cache.settings==='object'?state.cache.settings:{};
+  return {
+    name:String(s.businessName||'LEMON TRADING'),
+    phone:String(s.phone||''),
+    address:String(s.address||''),
+    prefix:String(s.invoicePrefix||'INV')
+  };
+}
+function pdfAscii(v){
+  return String(v??'').normalize('NFKD').replace(/[₹€£]/g,'').replace(/[^\x20-\x7E]/g,'?');
+}
+function pdfEscape(v){return pdfAscii(v).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)')}
+function makePdfBlob(title, lines){
+  const pageW=595, pageH=842, margin=42, font=9, lineH=13, maxChars=92;
+  const wrapped=[];
+  for(const item of lines){
+    const text=pdfAscii(item.text||'');
+    const size=Math.min(Number(item.size||font),16);
+    const max=Math.max(25,Math.floor(maxChars*9/size));
+    if(!text){wrapped.push({text:'',size,gap:item.gap||lineH});continue;}
+    let remain=text;
+    while(remain.length>max){
+      let cut=remain.lastIndexOf(' ',max); if(cut<20)cut=max;
+      wrapped.push({text:remain.slice(0,cut),size,gap:lineH}); remain=remain.slice(cut).trimStart();
+    }
+    wrapped.push({text:remain,size,gap:item.gap||lineH});
+  }
+  const pages=[]; let page=[]; let y=pageH-margin;
+  for(const l of wrapped){
+    const needed=l.size+4;
+    if(y-needed<margin){pages.push(page);page=[];y=pageH-margin;}
+    page.push({...l,y}); y-=l.gap||lineH;
+  }
+  if(page.length||!pages.length)pages.push(page);
+  const objs=[];
+  const add=o=>{objs.push(o);return objs.length};
+  const catalog=add(''); const pagesObj=add(''); const fontObj=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const pageNums=[];
+  for(const pg of pages){
+    const ops=['BT','0 g'];
+    for(const l of pg){ops.push(`/F1 ${l.size} Tf`,`1 0 0 1 ${margin} ${l.y} Tm`,`(${pdfEscape(l.text)}) Tj`)}
+    ops.push('ET');
+    const stream=ops.join('\n');
+    const contentObj=add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+    const pageObj=add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 ${fontObj} 0 R >> >> /Contents ${contentObj} 0 R >>`);
+    pageNums.push(pageObj);
+  }
+  objs[catalog-1]=`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
+  objs[pagesObj-1]=`<< /Type /Pages /Kids [${pageNums.map(n=>`${n} 0 R`).join(' ')}] /Count ${pageNums.length} >>`;
+  let pdf='%PDF-1.4\n'; const offsets=[0];
+  for(let i=0;i<objs.length;i++){offsets.push(pdf.length);pdf+=`${i+1} 0 obj\n${objs[i]}\nendobj\n`;}
+  const xref=pdf.length; pdf+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n`;
+  for(let i=1;i<offsets.length;i++)pdf+=`${String(offsets[i]).padStart(10,'0')} 00000 n \n`;
+  pdf+=`trailer\n<< /Size ${objs.length+1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new Blob([pdf],{type:'application/pdf'});
+}
+function downloadBlob(filename,blob){
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+async function sharePdf(blob,filename,title,text){
+  const file=new File([blob],filename,{type:'application/pdf'});
+  if(navigator.share && navigator.canShare){
+    try{
+      if(navigator.canShare({files:[file]})){await navigator.share({title,text,files:[file]});return true;}
+    }catch(e){if(e?.name==='AbortError')return false;}
+  }
+  downloadBlob(filename,blob);
+  if(navigator.share){try{await navigator.share({title,text});return true;}catch(e){if(e?.name==='AbortError')return false;}}
+  return false;
+}
+function whatsappText(text){window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank')}
 
 function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{const db=req.result;for(const s of STORES){if(!db.objectStoreNames.contains(s)){const os=db.createObjectStore(s,{keyPath:'id'});if(s==='sales')os.createIndex('date','date');if(s==='purchases')os.createIndex('date','date');if(s==='payments')os.createIndex('date','date');if(s==='expenses')os.createIndex('date','date');if(s==='wastage')os.createIndex('date','date');}}};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)});
 }
@@ -192,14 +264,51 @@ function showExpenseForm(){openModal('Add Expense',`<form class="form" id="expen
 function showWastageForm(){openModal('Add Wastage',`<form class="form" id="wasteForm"><div class="form-row"><label class="field">Date<input id="wDate" type="date" value="${today()}"></label><label class="field">Quantity (kg)<input id="wQty" type="number" min="0.001" step="0.001" required></label></div><label class="field">Reason<select id="wReason"><option>Spoilage</option><option>Quality Reject</option><option>Damaged</option><option>Other</option></select></label><label class="field">Notes<textarea id="wNote" rows="2"></textarea></label><div class="form-actions"><button type="button" class="secondary" onclick="closeModal()">Cancel</button><button class="primary">Save Wastage</button></div></form>`);$('wasteForm').onsubmit=async e=>{e.preventDefault();await put('wastage',{id:uuid(),date:$('wDate').value,qty:Number($('wQty').value||0),reason:$('wReason').value,note:$('wNote').value.trim()});await loadAll();closeModal();showScreen('stock')}}
 function showAdjustmentForm(){openModal('Stock Adjustment',`<form class="form" id="adjForm"><div class="form-row"><label class="field">Date<input id="aDate" type="date" value="${today()}"></label><label class="field">Qty (kg)<input id="aQty" type="number" step="0.001" required></label></div><label class="field">Type<select id="aType"><option value="add">Add Stock</option><option value="remove">Remove Stock</option></select></label><label class="field">Reason<textarea id="aNote" rows="2"></textarea></label><div class="form-actions"><button type="button" class="secondary" onclick="closeModal()">Cancel</button><button class="primary">Save Adjustment</button></div></form>`);$('adjForm').onsubmit=async e=>{e.preventDefault();let q=Number($('aQty').value||0);if($('aType').value==='remove')q=-q;await put('adjustments',{id:uuid(),date:$('aDate').value,qty:q,note:$('aNote').value.trim()});await loadAll();closeModal();showScreen('stock')}}
 
+function invoiceShareText(s){
+  const profile=businessProfile(),c=party(s.customerId); const gross=Number(s.qty||0)*Number(s.rate||0);
+  const lines=[
+    profile.name,
+    'SALES BILL',
+    `Bill: ${s.invoice||'-'}`,
+    `Date: ${fmtDate(s.date)}`,
+    `Customer: ${c?.name||'-'}`,
+    c?.mobile?`Mobile: ${c.mobile}`:'',
+    `Lemon: ${s.qty||0} kg × ${money(s.rate||0)}`,
+    `Gross Amount: ${money(gross)}`,
+    Number(s.discount||0)>0?`Discount: -${money(s.discount)}`:'',
+    Number(s.extra||0)>0?`Other Charges: +${money(s.extra)}`:'',
+    `Total: ${money(s.total||0)}`,
+    `Received: ${money(s.received||0)}`,
+    `Balance: ${money((s.total||0)-(s.received||0))}`,
+    'Thank You!'
+  ];
+  return lines.filter(Boolean).join('\n');
+}
 function showBill(id){
-  const s=state.cache.sales.find(x=>x.id===id);if(!s)return;const c=party(s.customerId);
-  openModal(`Invoice ${s.invoice}`,`<div class="bill" id="printBill"><h3>${esc(state.cache.settings.businessName)}</h3><div class="center-muted">${esc(state.cache.settings.phone||'')}</div><div class="center-muted">SALES BILL</div><div class="item-meta">Bill No: ${esc(s.invoice)} · ${fmtDate(s.date)}</div><div class="item-meta">Customer: <strong>${esc(c?.name||'-')}</strong>${c?.mobile?` · ${esc(c.mobile)}`:''}</div><table class="bill-table"><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr><tr><td>Lemon</td><td>${s.qty} kg</td><td>${money(s.rate)}</td><td>${money(s.qty*s.rate)}</td></tr></table>${s.discount?`<div class="item"><span>Discount</span><span>${money(s.discount)}</span></div>`:''}${s.extra?`<div class="item"><span>Other</span><span>${money(s.extra)}</span></div>`:''}<div class="item"><strong>Total</strong><strong>${money(s.total)}</strong></div><div class="item"><span>Received</span><span>${money(s.received)}</span></div><div class="item"><strong>Balance</strong><strong>${money(s.total-s.received)}</strong></div><div class="center-muted">Thank You!</div></div><div class="form-actions"><button class="secondary" onclick="showSaleForm('${s.id}')">✏️ Edit</button><button class="danger-btn" onclick="deleteSale('${s.id}')">🗑 Delete</button></div><div class="form-actions"><button class="secondary" onclick="window.print()">🖨 Print / Save PDF</button><button class="primary" onclick="shareBill('${s.id}')">📤 Share</button></div>`)
+  const s=state.cache.sales.find(x=>x.id===id);if(!s)return;const c=party(s.customerId),profile=businessProfile();
+  const gross=Number(s.qty||0)*Number(s.rate||0);
+  openModal(`Invoice ${s.invoice}`,`<div class="bill" id="printBill"><h3>${esc(profile.name)}</h3><div class="center-muted">${esc(profile.address)}</div><div class="center-muted">${esc(profile.phone)}</div><div class="center-muted">SALES BILL</div><div class="item-meta">Bill No: ${esc(s.invoice)} · ${fmtDate(s.date)}</div><div class="item-meta">Customer: <strong>${esc(c?.name||'-')}</strong>${c?.mobile?` · ${esc(c.mobile)}`:''}</div><table class="bill-table"><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr><tr><td>Lemon</td><td>${s.qty} kg</td><td>${money(s.rate)}</td><td>${money(gross)}</td></tr></table>${s.discount?`<div class="item"><span>Discount</span><span>- ${money(s.discount)}</span></div>`:''}${s.extra?`<div class="item"><span>Other Charges</span><span>+ ${money(s.extra)}</span></div>`:''}<div class="item"><strong>Total</strong><strong>${money(s.total)}</strong></div><div class="item"><span>Received</span><span>${money(s.received)}</span></div><div class="item"><strong>Balance</strong><strong>${money(s.total-s.received)}</strong></div><div class="center-muted">Thank You!</div></div><div class="form-actions"><button class="secondary" onclick="showSaleForm('${s.id}')">✏️ Edit</button><button class="danger-btn" onclick="deleteSale('${s.id}')">🗑 Delete</button></div><div class="form-actions"><button class="secondary" onclick="window.print()">🖨 Print / Save PDF</button><button class="primary" onclick="shareInvoicePdf('${s.id}')">📄 Share PDF</button></div><div class="form-actions"><button class="secondary" onclick="shareBill('${s.id}')">📤 WhatsApp / Text</button></div>`)
 }
 window.showBill=showBill;
-
-async function shareBill(id){const s=state.cache.sales.find(x=>x.id===id),c=party(s.customerId),text=`${state.cache.settings.businessName}\nBill: ${s.invoice}\nCustomer: ${c?.name||'-'}\nLemon: ${s.qty} kg × ${money(s.rate)}\nTotal: ${money(s.total)}\nReceived: ${money(s.received)}\nBalance: ${money(s.total-s.received)}`;if(navigator.share){try{await navigator.share({title:s.invoice,text})}catch(e){}}else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank')}
-window.showBill=showBill;window.shareBill=shareBill;window.closeModal=closeModal;
+async function shareBill(id){
+  const s=state.cache.sales.find(x=>x.id===id);if(!s)return;
+  const text=invoiceShareText(s);
+  if(navigator.share){try{await navigator.share({title:s.invoice||'Sales Bill',text})}catch(e){if(e?.name!=='AbortError')whatsappText(text)}}else whatsappText(text);
+}
+async function shareInvoicePdf(id){
+  const s=state.cache.sales.find(x=>x.id===id);if(!s)return; const c=party(s.customerId),profile=businessProfile();
+  const gross=Number(s.qty||0)*Number(s.rate||0),text=invoiceShareText(s);
+  const lines=[
+    {text:profile.name,size:16,gap:18},{text:profile.address,size:9,gap:12},{text:profile.phone,size:9,gap:16},
+    {text:'SALES BILL',size:13,gap:18},{text:`Bill No: ${s.invoice}`,size:10},{text:`Date: ${fmtDate(s.date)}`,size:10},{text:`Customer: ${c?.name||'-'}`,size:10},{text:c?.mobile?`Mobile: ${c.mobile}`:'',size:9,gap:16},
+    {text:`Item: Lemon`,size:10},{text:`Quantity: ${s.qty} kg`,size:10},{text:`Rate: ${money(s.rate)}`,size:10},{text:`Gross Amount: ${money(gross)}`,size:10},
+    {text:`Discount: ${Number(s.discount||0)>0?'- '+money(s.discount):money(0)}`,size:10},{text:`Other Charges: ${Number(s.extra||0)>0?'+ '+money(s.extra):money(0)}`,size:10},{text:`Total: ${money(s.total)}`,size:11},{text:`Received: ${money(s.received)}`,size:10},{text:`Balance: ${money(s.total-s.received)}`,size:11,gap:18},{text:'Thank You!',size:10}
+  ];
+  const blob=makePdfBlob(s.invoice||'Invoice',lines); const filename=`${s.invoice||'invoice'}.pdf`;
+  const shared=await sharePdf(blob,filename,s.invoice||'Sales Bill',text);
+  if(!shared && !(navigator.share&&navigator.canShare)){alert(`PDF உருவாக்கப்பட்டு download செய்யப்பட்டது: ${filename}`)}
+}
+window.shareBill=shareBill;window.shareInvoicePdf=shareInvoicePdf;window.closeModal=closeModal;
 
 function renderDashboard(){const t=today();$('todayLabel').textContent=fmtDate(t);const sales=state.cache.sales.filter(x=>x.date===t),pur=state.cache.purchases.filter(x=>x.date===t),exp=state.cache.expenses.filter(x=>x.date===t);$('statSales').textContent=money(sales.reduce((s,x)=>s+x.total,0));$('statPurchase').textContent=money(pur.reduce((s,x)=>s+x.total,0));$('statProfit').textContent=money(sales.reduce((s,x)=>s+x.total-saleCost(x),0));$('statReceivable').textContent=money(customers().reduce((s,p)=>s+customerBalance(p.id),0));$('statPayable').textContent=money(suppliers().reduce((s,p)=>s+supplierBalance(p.id),0));$('statStock').textContent=qty(stock().current);const tx=[...sales.map(x=>({date:x.date,name:party(x.customerId)?.name||'-',no:x.invoice,amount:x.total,type:'Sale'})),...pur.map(x=>({date:x.date,name:party(x.supplierId)?.name||'-',no:x.no,amount:x.total,type:'Purchase'})),...state.cache.payments.filter(x=>x.date===t).map(x=>({date:x.date,name:party(x.partyId)?.name||'-',no:'Payment',amount:x.amount,type:x.partyType==='customer'?'Receipt':'Supplier Payment'})),...exp.map(x=>({date:x.date,name:x.category,no:'Expense',amount:x.amount,type:'Expense'}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8);$('recentList').innerHTML=tx.length?tx.map(x=>`<div class="item"><div class="item-main"><div class="item-title">${esc(x.name)}</div><div class="item-meta">${fmtDate(x.date)} · ${x.no}</div></div><div class="item-side"><div class="amount">${money(x.amount)}</div><div class="pill">${esc(x.type)}</div></div></div>`).join(''):'<div class="empty">No transactions yet</div>'}
 function renderSales(){const q=($('salesSearch').value||'').toLowerCase();const a=[...state.cache.sales].reverse().filter(x=>`${x.invoice} ${party(x.customerId)?.name||''}`.toLowerCase().includes(q));$('salesList').innerHTML=a.length?a.map(x=>`<div class="item"><div class="item-main" onclick="showBill('${x.id}')"><div class="item-title">${esc(party(x.customerId)?.name||'-')}</div><div class="item-meta">${fmtDate(x.date)} · ${x.invoice} · ${qty(x.qty)}</div></div><div class="item-side"><div class="amount">${money(x.total)}</div><div class="${x.total-x.received>0?'negative':'positive'}">${x.total-x.received>0?`Due ${money(x.total-x.received)}`:'Paid'}</div><div class="action-pair"><button class="mini-btn" onclick="showSaleForm('${x.id}')">✏️ Edit</button><button class="mini-btn danger-mini" onclick="deleteSale('${x.id}')">🗑</button></div></div></div>`).join(''):'<div class="empty">No sales bills</div>'}
@@ -274,8 +383,9 @@ async function showLedger(id){
   openModal(`${p.name} · Statement`,`<div class="form">
     ${roleOptions}
     <div class="form-row"><label class="field">From<input id="ledgerFrom" type="date" value="${first}"></label><label class="field">To<input id="ledgerTo" type="date" value="${today()}"></label></div>
-    <div class="form-actions"><button class="secondary" id="ledgerApply">Apply</button><button class="primary" id="ledgerPrint">🖨 Print / Save PDF</button></div>
-    <div class="form-actions"><button class="secondary" id="ledgerShare">📤 Share / WhatsApp</button><button class="secondary" id="ledgerClose">Close</button></div>
+    <div class="form-actions"><button class="secondary" id="ledgerApply">Apply</button><button class="secondary" id="ledgerPrint">🖨 Print / Save PDF</button></div>
+    <div class="form-actions"><button class="primary" id="ledgerSharePdf">📄 Share PDF</button><button class="secondary" id="ledgerShare">📤 WhatsApp / Text</button></div>
+    <div class="form-actions"><button class="secondary" id="ledgerClose">Close</button></div>
     <div id="statementPreview"></div>
   </div>`);
   if($('ledgerRole'))$('ledgerRole').onchange=()=>renderLedgerPreview(id);
@@ -285,20 +395,42 @@ async function showLedger(id){
   $('ledgerPrint').onclick=()=>{renderLedgerPreview(id);setTimeout(()=>window.print(),50)};
   $('ledgerClose').onclick=closeModal;
   $('ledgerShare').onclick=()=>shareStatement(id);
+  $('ledgerSharePdf').onclick=()=>shareStatementPdf(id);
   renderLedgerPreview(id);
 }
 
-async function shareStatement(id){
-  const p=party(id);if(!p)return;
+function statementShareData(id){
+  const p=party(id);if(!p)return null;
   const role=statementRole(p),from=$('ledgerFrom')?.value||ledgerRows(id,role)[0]?.date||today(),to=$('ledgerTo')?.value||today();
   const all=ledgerRows(id,role),before=all.filter(r=>r.date<from),rows=all.filter(r=>inRange(r.date,from,to));
-  const opening=Number(p.openingBalance||0)+before.reduce((s,r)=>s+r.debit-r.credit,0);
+  const opening=Number(p.openingBalance||0)+before.reduce((s,r)=>s+r.debit-r.credit,0);let running=opening;
+  const mapped=rows.map(r=>{running+=r.debit-r.credit;return {...r,balance:running}});
   const debit=rows.reduce((s,r)=>s+r.debit,0),credit=rows.reduce((s,r)=>s+r.credit,0),closing=opening+debit-credit;
-  const text=[`${state.cache.settings.businessName||'LEMON TRADING'}`,'Account Statement',`Party: ${p.name}`,`Type: ${role==='customer'?'Customer':'Supplier'}`,`Period: ${fmtDate(from)} - ${fmtDate(to)}`,`Opening: ${money(opening)}`,`Debit: ${money(debit)}`,`Credit: ${money(credit)}`,`Closing Balance: ${money(closing)}`].join('\n');
-  if(navigator.share){try{await navigator.share({title:'Account Statement',text})}catch(e){}}
-  else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank');
+  return {p,role,from,to,rows:mapped,opening,debit,credit,closing};
 }
-window.showLedger=showLedger;window.shareStatement=shareStatement;
+function statementText(id){
+  const d=statementShareData(id);if(!d)return '';
+  const profile=businessProfile(),lines=[profile.name,'ACCOUNT STATEMENT',`Party: ${d.p.name}`,`Type: ${d.role==='customer'?'Customer':'Supplier'}`,`Period: ${fmtDate(d.from)} - ${fmtDate(d.to)}`,`Opening: ${money(d.opening)}`];
+  for(const r of d.rows)lines.push(`${fmtDate(r.date)} | ${r.no} | ${r.desc} | Debit ${money(r.debit)} | Credit ${money(r.credit)} | Bal ${money(r.balance)}`);
+  lines.push(`Total Debit: ${money(d.debit)}`,`Total Credit: ${money(d.credit)}`,`Closing Balance: ${money(d.closing)}`);return lines.join('\n');
+}
+async function shareStatement(id){
+  const text=statementText(id);if(!text)return;
+  if(navigator.share){try{await navigator.share({title:'Account Statement',text})}catch(e){if(e?.name!=='AbortError')whatsappText(text)}}else whatsappText(text);
+}
+async function shareStatementPdf(id){
+  const d=statementShareData(id);if(!d)return; const profile=businessProfile();
+  const lines=[
+    {text:profile.name,size:16,gap:18},{text:profile.address,size:9,gap:12},{text:profile.phone,size:9,gap:15},{text:'ACCOUNT STATEMENT',size:13,gap:18},
+    {text:`Party: ${d.p.name}`,size:10},{text:`Type: ${d.role==='customer'?'Customer':'Supplier'}`,size:10},{text:`Period: ${fmtDate(d.from)} to ${fmtDate(d.to)}`,size:9,gap:15},{text:`Opening Balance: ${money(d.opening)}`,size:10,gap:15},
+  ];
+  for(const r of d.rows){lines.push({text:`${fmtDate(r.date)} | ${r.no} | ${r.desc} | Debit ${money(r.debit)} | Credit ${money(r.credit)} | Balance ${money(r.balance)}`,size:8,gap:11});if(r.note)lines.push({text:`  Note: ${r.note}`,size:7,gap:10})}
+  lines.push({text:`Total Debit: ${money(d.debit)}`,size:10,gap:15},{text:`Total Credit: ${money(d.credit)}`,size:10},{text:`Closing Balance: ${money(d.closing)}`,size:11,gap:18},{text:`Generated: ${fmtDate(today())}`,size:8});
+  const blob=makePdfBlob('Account Statement',lines),filename=`Statement-${String(d.p.name).replace(/[^a-z0-9_-]+/gi,'_')}-${d.from}-to-${d.to}.pdf`,text=statementText(id);
+  const shared=await sharePdf(blob,filename,'Account Statement',text);
+  if(!shared && !(navigator.share&&navigator.canShare)){alert(`Statement PDF உருவாக்கப்பட்டு download செய்யப்பட்டது: ${filename}`)}
+}
+window.showLedger=showLedger;window.shareStatement=shareStatement;window.shareStatementPdf=shareStatementPdf;
 function renderStock(){const s=stock();$('stockOpening').textContent=qty(s.opening);$('stockPurchased').textContent=qty(s.purchased);$('stockSold').textContent=qty(s.sold);$('stockWastage').textContent=qty(s.wastage);$('stockAdjustment').textContent=qty(s.adjustment);$('stockCurrent').textContent=qty(s.current);const rows=[...state.cache.purchases.map(x=>({date:x.date,name:party(x.supplierId)?.name||'-',type:'Purchase',q:x.qty})),...state.cache.sales.map(x=>({date:x.date,name:party(x.customerId)?.name||'-',type:'Sale',q:-x.qty})),...state.cache.wastage.map(x=>({date:x.date,name:x.reason,type:'Wastage',q:-x.qty})),...state.cache.adjustments.map(x=>({date:x.date,name:x.note||'Adjustment',type:'Adjustment',q:x.qty}))].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);$('stockList').innerHTML=rows.length?rows.map(r=>`<div class="item"><div class="item-main"><div class="item-title">${esc(r.name)}</div><div class="item-meta">${fmtDate(r.date)} · ${r.type}</div></div><div class="item-side"><div class="${r.q>=0?'positive':'negative'}">${r.q>=0?'+':''}${qty(r.q)}</div></div></div>`).join(''):'<div class="empty">No stock movements</div>'}
 function renderAccounts(){const el=$('accountsList');if(state.accountTab==='expenses'){const a=[...state.cache.expenses].reverse();el.innerHTML=a.length?a.map(x=>`<div class="item"><div class="item-main"><div class="item-title">${esc(x.category)}</div><div class="item-meta">${fmtDate(x.date)} · ${esc(x.mode)}${x.note?` · ${esc(x.note)}`:''}</div></div><div class="item-side"><div class="amount">${money(x.amount)}</div></div></div>`).join(''):'<div class="empty">No expenses</div>';return}const a=[...state.cache.payments].reverse();el.innerHTML=a.length?a.map(x=>`<div class="item"><div class="item-main"><div class="item-title">${esc(party(x.partyId)?.name||'-')}</div><div class="item-meta">${fmtDate(x.date)} · ${esc(x.mode)}${x.ref?` · ${esc(x.ref)}`:''}</div></div><div class="item-side"><div class="amount">${money(x.amount)}</div><div class="pill">${x.partyType==='customer'?'Received':'Paid'}</div></div></div>`).join(''):'<div class="empty">No payments</div>'}
 function renderReport(){const from=$('fromDate').value||today(),to=$('toDate').value||today(),sales=state.cache.sales.filter(x=>inRange(x.date,from,to)),pur=state.cache.purchases.filter(x=>inRange(x.date,from,to)),exp=state.cache.expenses.filter(x=>inRange(x.date,from,to)),w=state.cache.wastage.filter(x=>inRange(x.date,from,to));const st=sales.reduce((s,x)=>s+x.total,0),pt=pur.reduce((s,x)=>s+x.total,0),gp=sales.reduce((s,x)=>s+x.total-saleCost(x),0),ex=exp.reduce((s,x)=>s+x.amount,0);$('repSales').textContent=money(st);$('repPurchase').textContent=money(pt);$('repProfit').textContent=money(gp);$('repSalesQty').textContent=qty(sales.reduce((s,x)=>s+x.qty,0));$('repPurchaseQty').textContent=qty(pur.reduce((s,x)=>s+x.qty,0));$('repWastage').textContent=qty(w.reduce((s,x)=>s+x.qty,0));$('repExpenses').textContent=money(ex);$('repNetProfit').textContent=money(gp-ex);const a=parties().map(p=>{const isC=p.roles.includes('customer');const bal=isC?customerBalance(p.id):supplierBalance(p.id);return {p,bal,isC}}).filter(x=>Math.abs(x.bal)>.001);$('outstandingList').innerHTML=a.length?a.sort((x,y)=>Math.abs(y.bal)-Math.abs(x.bal)).map(x=>`<div class="item" onclick="showLedger('${x.p.id}')"><div class="item-main"><div class="item-title">${esc(x.p.name)}</div><div class="item-meta">${x.isC?'Customer':'Supplier'}</div></div><div class="item-side"><div class="${x.bal>0?'negative':'positive'}">${money(x.bal)}</div></div></div>`).join(''):'<div class="empty">No outstanding balances</div>'}
@@ -380,4 +512,4 @@ function showSettings(){openModal('Settings & Data',`<div class="form"><label cl
 };$('restoreBtn').onclick=()=>$('restoreFile').click();$('restoreFile').onchange=async e=>{if(e.target.files[0]){try{await restoreBackup(e.target.files[0])}catch(err){alert('Restore failed: '+err.message)}}};$('clearAllBtn').onclick=async()=>{if(confirm('All V2 data will be deleted. Continue?')){for(const s of STORES)await clearStore(s);await seedIfEmpty();await loadAll();closeModal();renderAll()}}}
 
 $('fromDate').value=today();$('toDate').value=today();
-(async function init(){await seedIfEmpty();await ensureMainSettings();await loadAll();$('brandName').textContent='🍋 '+(state.cache.settings.businessName||'LEMON TRADING');renderAll()})();
+(async function init(){await seedIfEmpty();await ensureMainSettings();await loadAll();$('brandName').textContent='🍋 '+businessProfile().name;renderAll()})();
