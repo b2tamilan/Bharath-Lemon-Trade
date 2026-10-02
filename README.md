@@ -69,7 +69,7 @@ This is a functional local-first V2 application. Data is stored in the browser's
 - Amount received/paid that was auto-created with the transaction is updated or removed when the source transaction is edited/deleted. Manual ledger payments remain separate.
 - Purchase and Sale edit/delete actions include stock-safety checks so the resulting stock does not go negative.
 
-## V2.4 Restore + Shareable PDF Fix
+## V2.5 Restore + Shareable PDF Fix
 - Fixes the V2 backup restore `Symbol.iterator` error caused by treating the single settings object as an array.
 - Accepts both corrected V2 backups (settings array) and older V2 backups where settings was exported as one object.
 - Recreates the `main` settings row when missing.
@@ -77,7 +77,7 @@ This is a functional local-first V2 application. Data is stored in the browser's
 - Backup now exports every settings row.
 
 
-## V2.4 PDF sharing
+## V2.5 PDF sharing
 - Sales invoices can be shared as PDF files on browsers that support Web Share file sharing.
 - Ledger statements can be shared as PDF files.
 - Invoice WhatsApp/text share now includes Gross Amount, Discount and Other Charges when present.
