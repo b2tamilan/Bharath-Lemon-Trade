@@ -90,7 +90,7 @@ function pdfText(ops,text,x,y,size=9,bold=false,align='left',pageW=595){
   const safe=pdfEscape(text); const font=bold?'/F2':'/F1'; let xx=x;
   if(align==='center') xx=x-(String(text).length*size*0.25);
   else if(align==='right') xx=x-(String(text).length*size*0.50);
-  ops.push(`${font} ${size} Tf`,`1 0 0 1 ${xx.toFixed(2)} ${y.toFixed(2)} Tm`,`(${safe}) Tj`);
+  ops.push('0 g',`${font} ${size} Tf`,`1 0 0 1 ${xx.toFixed(2)} ${y.toFixed(2)} Tm`,`(${safe}) Tj`);
 }
 function makeStyledInvoicePdf(s){
   const c=party(s.customerId), profile=businessProfile(), W=595,H=842,m=42,right=W-m;
