@@ -83,3 +83,6 @@ This is a functional local-first V2 application. Data is stored in the browser's
 - Invoice WhatsApp/text share now includes Gross Amount, Discount and Other Charges when present.
 - If direct file sharing is unsupported, the PDF is downloaded and text sharing is offered where available.
 - PDF uses a standard built-in Latin font for broad browser compatibility.
+
+## V2.5 PDF Share
+Invoice and Ledger Statement Share PDF now use the same structured layout as the on-screen Print/Save PDF design: header, party details, table, totals, and summary. PDF sharing uses the browser Web Share file API when supported, with download fallback.

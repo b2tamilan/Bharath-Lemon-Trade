@@ -20,7 +20,7 @@ function businessProfile(){
   };
 }
 function pdfAscii(v){
-  return String(v??'').normalize('NFKD').replace(/[₹€£]/g,'').replace(/[^\x20-\x7E]/g,'?');
+  return String(v??'').normalize('NFKD').replace(/₹/g,'Rs. ').replace(/[€£]/g,'').replace(/[^\x20-\x7E]/g,'?');
 }
 function pdfEscape(v){return pdfAscii(v).replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)')}
 function makePdfBlob(title, lines){
@@ -82,6 +82,59 @@ async function sharePdf(blob,filename,title,text){
   return false;
 }
 function whatsappText(text){window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,'_blank')}
+
+function pdfFmtMoney(n){return `Rs. ${Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}`}
+function pdfLine(ops,x1,y1,x2,y2,width=0.6,gray=0.82){ops.push(`${gray} G`,`${width} w`,`${x1} ${y1} m ${x2} ${y2} l S`)}
+function pdfRect(ops,x,y,w,h,fillGray=0.95,strokeGray=null){if(fillGray!==null)ops.push(`${fillGray} g`,`${x} ${y} ${w} ${h} re f`);if(strokeGray!==null)ops.push(`${strokeGray} G`,`0.6 w`,`${x} ${y} ${w} ${h} re S`)}
+function pdfText(ops,text,x,y,size=9,bold=false,align='left',pageW=595){
+  const safe=pdfEscape(text); const font=bold?'/F2':'/F1'; let xx=x;
+  if(align==='center') xx=x-(String(text).length*size*0.25);
+  else if(align==='right') xx=x-(String(text).length*size*0.50);
+  ops.push(`${font} ${size} Tf`,`1 0 0 1 ${xx.toFixed(2)} ${y.toFixed(2)} Tm`,`(${safe}) Tj`);
+}
+function makeStyledInvoicePdf(s){
+  const c=party(s.customerId), profile=businessProfile(), W=595,H=842,m=42,right=W-m;
+  const objs=[]; const add=o=>{objs.push(o);return objs.length}; const catalog=add(''),pagesObj=add('');
+  const f1=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const f2=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
+  const ops=['q']; let y=H-46;
+  pdfText(ops,profile.name,m+(right-m)/2,y,16,true,'center'); y-=19;
+  if(profile.address){pdfText(ops,profile.address,m+(right-m)/2,y,9,false,'center');y-=13}
+  if(profile.phone){pdfText(ops,profile.phone,m+(right-m)/2,y,9,false,'center');y-=15}
+  pdfText(ops,'SALES BILL',m+(right-m)/2,y,13,true,'center'); y-=23;
+  pdfText(ops,`Bill No: ${s.invoice}`,m,y,9,false); pdfText(ops,`Date: ${fmtDate(s.date)}`,right,y,9,false,'right'); y-=16;
+  pdfText(ops,`Customer: ${c?.name||'-'}`,m,y,9,false); if(c?.mobile)pdfText(ops,`Mobile: ${c.mobile}`,right,y,9,false,'right'); y-=18;
+  const x0=m,x1=250,x2=380,x3=455,x4=right;
+  pdfLine(ops,x0,y+4,x4,y+4,0.8,0.70); pdfText(ops,'Item',x0,y-9,9,true);pdfText(ops,'Qty',x1,y-9,9,true);pdfText(ops,'Rate',x2,y-9,9,true);pdfText(ops,'Amount',x4,y-9,9,true,'right'); y-=25;
+  const gross=Number(s.qty||0)*Number(s.rate||0);
+  pdfText(ops,'Lemon',x0,y,9);pdfText(ops,`${s.qty} kg`,x1,y,9);pdfText(ops,pdfFmtMoney(s.rate),x2,y,9);pdfText(ops,pdfFmtMoney(gross),x4,y,9,false,'right');
+  pdfLine(ops,x0,y-10,x4,y-10,0.6,0.85); y-=29;
+  if(Number(s.discount||0)){pdfText(ops,'Discount',x0,y,9);pdfText(ops,`- ${pdfFmtMoney(s.discount)}`,x4,y,9,false,'right');pdfLine(ops,x0,y-10,x4,y-10,0.6,0.88);y-=25;}
+  if(Number(s.extra||0)){pdfText(ops,'Other Charges',x0,y,9);pdfText(ops,`+ ${pdfFmtMoney(s.extra)}`,x4,y,9,false,'right');pdfLine(ops,x0,y-10,x4,y-10,0.6,0.88);y-=25;}
+  pdfText(ops,'Total',x0,y,10,true);pdfText(ops,pdfFmtMoney(s.total),x4,y,10,true,'right');pdfLine(ops,x0,y-10,x4,y-10,0.8,0.78);y-=26;
+  pdfText(ops,'Received',x0,y,9);pdfText(ops,pdfFmtMoney(s.received),x4,y,9,false,'right');pdfLine(ops,x0,y-10,x4,y-10,0.6,0.88);y-=25;
+  pdfText(ops,'Balance',x0,y,10,true);pdfText(ops,pdfFmtMoney(Number(s.total||0)-Number(s.received||0)),x4,y,10,true,'right');pdfLine(ops,x0,y-10,x4,y-10,0.8,0.78);y-=22;
+  pdfText(ops,'Thank You!',(x0+x4)/2,y,9,false,'center');
+  ops.push('Q');
+  const stream=ops.join('\n'); const contentObj=add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  const pageObj=add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> /Contents ${contentObj} 0 R >>`);
+  objs[catalog-1]=`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;objs[pagesObj-1]=`<< /Type /Pages /Kids [${pageObj} 0 R] /Count 1 >>`;
+  return finalizePdf(objs,catalog);
+}
+function finalizePdf(objs,catalog){let pdf='%PDF-1.4\n';const offsets=[0];for(let i=0;i<objs.length;i++){offsets.push(pdf.length);pdf+=`${i+1} 0 obj\n${objs[i]}\nendobj\n`;}const xref=pdf.length;pdf+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n`;for(let i=1;i<offsets.length;i++)pdf+=`${String(offsets[i]).padStart(10,'0')} 00000 n \n`;pdf+=`trailer\n<< /Size ${objs.length+1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF`;return new Blob([pdf],{type:'application/pdf'})}
+function makeStyledStatementPdf(d){
+  const profile=businessProfile(),W=595,H=842,m=30,right=W-m, rowH=18, cols=[30,88,145,365,435,500,565];
+  const pages=[]; let ops=['q']; let y=H-38;
+  const startPage=()=>{ops=['q'];y=H-38;pdfText(ops,profile.name,m,y,15,true);if(profile.address)pdfText(ops,profile.address,m,y-14,8);if(profile.phone)pdfText(ops,profile.phone,m,y-26,8);pdfText(ops,'ACCOUNT STATEMENT',right,y,12,true,'right');y-=45;pdfText(ops,`Party: ${d.p.name}`,m,y,10,true);pdfText(ops,`Type: ${d.role==='customer'?'Customer':'Supplier'}`,right,y,9,false,'right');y-=14;if(d.p.mobile) {pdfText(ops,`Mobile: ${d.p.mobile}`,m,y,8);y-=12;}pdfText(ops,`Period: ${fmtDate(d.from)} to ${fmtDate(d.to)}`,m,y,8);y-=17;pdfRect(ops,m,y-4,right-m,18,0.94,null);const headers=['Date','Ref','Description','Debit','Credit','Balance'];headers.forEach((h,i)=>pdfText(ops,h,cols[i]+3,y+2,7,true,i>=3?'right':'left'));y-=19;}
+  const drawRow=(r,opening=false)=>{if(y<58){ops.push('Q');pages.push(ops);startPage();}const vals=opening?[fmtDate(d.from),'OPEN','Opening Balance','','',pdfFmtMoney(d.opening)]:[fmtDate(r.date),r.no,r.desc,r.debit?pdfFmtMoney(r.debit):'',r.credit?pdfFmtMoney(r.credit):'',pdfFmtMoney(r.balance)];vals.forEach((v,i)=>pdfText(ops,String(v||''),cols[i]+3,y,7,false,i>=3?'right':'left'));pdfLine(ops,m,y-5,right,y-5,0.45,0.88);y-=rowH;};
+  startPage();drawRow(null,true);for(const r of d.rows)drawRow(r,false);
+  if(y<120){ops.push('Q');pages.push(ops);startPage();}
+  y-=2;pdfLine(ops,m,y+9,right,y+9,0.8,0.55);pdfText(ops,'Total',cols[0]+3,y-3,8,true);pdfText(ops,pdfFmtMoney(d.debit),cols[3]+3,y-3,8,true,'right');pdfText(ops,pdfFmtMoney(d.credit),cols[4]+3,y-3,8,true,'right');pdfText(ops,pdfFmtMoney(d.closing),cols[5]+3,y-3,8,true,'right');y-=28;
+  const boxW=(right-m-18)/4; const summary=[['Opening',d.opening],['Debit',d.debit],['Credit',d.credit],['Closing',d.closing]];summary.forEach((it,i)=>{const x=m+i*(boxW+6);pdfRect(ops,x,y-27,boxW,27,0.98,0.82);pdfText(ops,it[0],x+6,y-11,7);pdfText(ops,pdfFmtMoney(it[1]),x+6,y-22,8,true)});y-=45;pdfText(ops,`Generated on ${fmtDate(today())} · This is a computer-generated statement.`,(m+right)/2,y,7,false,'center');ops.push('Q');pages.push(ops);
+  const objs=[];const add=o=>{objs.push(o);return objs.length};const catalog=add(''),pagesObj=add('');const f1=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');const f2=add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');const pageNums=[];
+  for(const pg of pages){const stream=pg.join('\n');const co=add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);const po=add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> /Contents ${co} 0 R >>`);pageNums.push(po)}
+  objs[catalog-1]=`<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;objs[pagesObj-1]=`<< /Type /Pages /Kids [${pageNums.map(n=>`${n} 0 R`).join(' ')}] /Count ${pageNums.length} >>`;return finalizePdf(objs,catalog);
+}
 
 function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{const db=req.result;for(const s of STORES){if(!db.objectStoreNames.contains(s)){const os=db.createObjectStore(s,{keyPath:'id'});if(s==='sales')os.createIndex('date','date');if(s==='purchases')os.createIndex('date','date');if(s==='payments')os.createIndex('date','date');if(s==='expenses')os.createIndex('date','date');if(s==='wastage')os.createIndex('date','date');}}};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)});
 }
@@ -296,17 +349,10 @@ async function shareBill(id){
   if(navigator.share){try{await navigator.share({title:s.invoice||'Sales Bill',text})}catch(e){if(e?.name!=='AbortError')whatsappText(text)}}else whatsappText(text);
 }
 async function shareInvoicePdf(id){
-  const s=state.cache.sales.find(x=>x.id===id);if(!s)return; const c=party(s.customerId),profile=businessProfile();
-  const gross=Number(s.qty||0)*Number(s.rate||0),text=invoiceShareText(s);
-  const lines=[
-    {text:profile.name,size:16,gap:18},{text:profile.address,size:9,gap:12},{text:profile.phone,size:9,gap:16},
-    {text:'SALES BILL',size:13,gap:18},{text:`Bill No: ${s.invoice}`,size:10},{text:`Date: ${fmtDate(s.date)}`,size:10},{text:`Customer: ${c?.name||'-'}`,size:10},{text:c?.mobile?`Mobile: ${c.mobile}`:'',size:9,gap:16},
-    {text:`Item: Lemon`,size:10},{text:`Quantity: ${s.qty} kg`,size:10},{text:`Rate: ${money(s.rate)}`,size:10},{text:`Gross Amount: ${money(gross)}`,size:10},
-    {text:`Discount: ${Number(s.discount||0)>0?'- '+money(s.discount):money(0)}`,size:10},{text:`Other Charges: ${Number(s.extra||0)>0?'+ '+money(s.extra):money(0)}`,size:10},{text:`Total: ${money(s.total)}`,size:11},{text:`Received: ${money(s.received)}`,size:10},{text:`Balance: ${money(s.total-s.received)}`,size:11,gap:18},{text:'Thank You!',size:10}
-  ];
-  const blob=makePdfBlob(s.invoice||'Invoice',lines); const filename=`${s.invoice||'invoice'}.pdf`;
+  const s=state.cache.sales.find(x=>x.id===id);if(!s)return;const text=invoiceShareText(s);
+  const blob=makeStyledInvoicePdf(s),filename=`${s.invoice||'invoice'}.pdf`;
   const shared=await sharePdf(blob,filename,s.invoice||'Sales Bill',text);
-  if(!shared && !(navigator.share&&navigator.canShare)){alert(`PDF உருவாக்கப்பட்டு download செய்யப்பட்டது: ${filename}`)}
+  if(!shared && !(navigator.share&&navigator.canShare)){alert(`Invoice PDF உருவாக்கப்பட்டு download செய்யப்பட்டது: ${filename}`)}
 }
 window.shareBill=shareBill;window.shareInvoicePdf=shareInvoicePdf;window.closeModal=closeModal;
 
@@ -419,14 +465,8 @@ async function shareStatement(id){
   if(navigator.share){try{await navigator.share({title:'Account Statement',text})}catch(e){if(e?.name!=='AbortError')whatsappText(text)}}else whatsappText(text);
 }
 async function shareStatementPdf(id){
-  const d=statementShareData(id);if(!d)return; const profile=businessProfile();
-  const lines=[
-    {text:profile.name,size:16,gap:18},{text:profile.address,size:9,gap:12},{text:profile.phone,size:9,gap:15},{text:'ACCOUNT STATEMENT',size:13,gap:18},
-    {text:`Party: ${d.p.name}`,size:10},{text:`Type: ${d.role==='customer'?'Customer':'Supplier'}`,size:10},{text:`Period: ${fmtDate(d.from)} to ${fmtDate(d.to)}`,size:9,gap:15},{text:`Opening Balance: ${money(d.opening)}`,size:10,gap:15},
-  ];
-  for(const r of d.rows){lines.push({text:`${fmtDate(r.date)} | ${r.no} | ${r.desc} | Debit ${money(r.debit)} | Credit ${money(r.credit)} | Balance ${money(r.balance)}`,size:8,gap:11});if(r.note)lines.push({text:`  Note: ${r.note}`,size:7,gap:10})}
-  lines.push({text:`Total Debit: ${money(d.debit)}`,size:10,gap:15},{text:`Total Credit: ${money(d.credit)}`,size:10},{text:`Closing Balance: ${money(d.closing)}`,size:11,gap:18},{text:`Generated: ${fmtDate(today())}`,size:8});
-  const blob=makePdfBlob('Account Statement',lines),filename=`Statement-${String(d.p.name).replace(/[^a-z0-9_-]+/gi,'_')}-${d.from}-to-${d.to}.pdf`,text=statementText(id);
+  const d=statementShareData(id);if(!d)return;
+  const blob=makeStyledStatementPdf(d);const filename=`Statement-${String(d.p.name).replace(/[^a-z0-9_-]+/gi,'_')}-${d.from}-to-${d.to}.pdf`;const text=statementText(id);
   const shared=await sharePdf(blob,filename,'Account Statement',text);
   if(!shared && !(navigator.share&&navigator.canShare)){alert(`Statement PDF உருவாக்கப்பட்டு download செய்யப்பட்டது: ${filename}`)}
 }
