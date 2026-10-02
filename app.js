@@ -17,7 +17,17 @@ async function getAll(store){const db=await openDB();return new Promise((resolve
 async function put(store,obj){const db=await openDB();return new Promise((resolve,reject)=>{const tx=db.transaction(store,'readwrite');tx.objectStore(store).put(obj);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error)})}
 async function del(store,id){const db=await openDB();return new Promise((resolve,reject)=>{const tx=db.transaction(store,'readwrite');tx.objectStore(store).delete(id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
 async function clearStore(store){const db=await openDB();return new Promise((resolve,reject)=>{const tx=db.transaction(store,'readwrite');tx.objectStore(store).clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}
-async function loadAll(){for(const s of STORES)state.cache[s]=await getAll(s);state.cache.settings=state.cache.settings[0]||{id:'main',businessName:'LEMON TRADING',phone:'',address:'',invoicePrefix:'INV'};}
+async function loadAll(){
+  for(const s of STORES)state.cache[s]=await getAll(s);
+  const settingsRows=Array.isArray(state.cache.settings)?state.cache.settings:[];
+  state.cache.settings=settingsRows.find(x=>x&&x.id==='main')||{id:'main',businessName:'LEMON TRADING',phone:'',address:'',openingStock:0,invoicePrefix:'INV'};
+}
+async function ensureMainSettings(){
+  const rows=await getAll('settings');
+  if(!rows.some(x=>x&&x.id==='main')){
+    await put('settings',{id:'main',businessName:'LEMON TRADING',phone:'',address:'',openingStock:0,invoicePrefix:'INV'});
+  }
+}
 async function saveMany(entries){for(const [s,obj] of entries)await put(s,obj);await loadAll();renderAll()}
 async function seedIfEmpty(){
   const settings=await getAll('settings');
@@ -298,9 +308,76 @@ function csv(rows){const escv=v=>`"${String(v??'').replace(/"/g,'""')}"`;return 
 function downloadText(name,text,type='text/csv'){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function exportCsv(){const rows=[['Type','Date','Number','Party','Quantity kg','Rate','Amount','Paid/Received','Balance']];for(const s of state.cache.sales)rows.push(['Sale',s.date,s.invoice,party(s.customerId)?.name||'',s.qty,s.rate,s.total,s.received,s.total-s.received]);for(const p of state.cache.purchases)rows.push(['Purchase',p.date,p.no,party(p.supplierId)?.name||'',p.qty,p.rate,p.total,p.paid,p.total-p.paid]);for(const p of state.cache.payments)rows.push(['Payment',p.date,'PAY',party(p.partyId)?.name||'', '', '',p.amount,p.amount,'']);downloadText(`lemon-transactions-${today()}.csv`,csv(rows))}
 function exportStatementAll(){const rows=[['Party','Type','Balance']];for(const p of parties()){if(p.roles.includes('customer'))rows.push([p.name,'Customer',customerBalance(p.id)]);else rows.push([p.name,'Supplier',supplierBalance(p.id)])}downloadText(`lemon-outstanding-${today()}.csv`,csv(rows))}
-async function backupJson(){await loadAll();const payload={version:2,exportedAt:new Date().toISOString(),stores:{}};for(const s of STORES)payload.stores[s]=state.cache[s];downloadText(`lemon-billing-backup-v2-${today()}.json`,JSON.stringify(payload,null,2),'application/json')}
-async function restoreBackup(file){const text=await file.text();const data=JSON.parse(text);if(data.version!==2)throw new Error('Only V2 backup is supported');if(!confirm('Current app data will be replaced by this backup. Continue?'))return;for(const s of STORES)await clearStore(s);for(const s of STORES)for(const row of (data.stores[s]||[]))await put(s,row);await loadAll();closeModal();renderAll();alert('Backup restored successfully.')}
-function showSettings(){openModal('Settings & Data',`<div class="form"><label class="field">Business Name<input id="setName" value="${esc(state.cache.settings.businessName||'LEMON TRADING')}"></label><label class="field">Phone<input id="setPhone" value="${esc(state.cache.settings.phone||'')}"></label><label class="field">Address<input id="setAddress" value="${esc(state.cache.settings.address||'')}"></label><label class="field">Opening Stock (kg)<input id="setOpeningStock" type="number" step="0.001" value="${Number(state.cache.settings.openingStock||0)}"></label><div class="form-actions"><button class="secondary" id="saveSettings">Save Settings</button><button class="primary" id="restoreBtn">Restore Backup</button></div><input type="file" id="restoreFile" accept="application/json" hidden><div class="card"><div class="item"><div class="item-main"><div class="item-title">Data storage</div><div class="item-meta">IndexedDB · local-first · works offline after PWA cache</div></div></div><button class="secondary" id="clearAllBtn">Clear all data</button></div></div>`);$('saveSettings').onclick=async()=>{state.cache.settings.businessName=$('setName').value.trim()||'LEMON TRADING';state.cache.settings.phone=$('setPhone').value.trim();state.cache.settings.address=$('setAddress').value.trim();state.cache.settings.openingStock=Number($('setOpeningStock').value||0);await put('settings',state.cache.settings);await loadAll();closeModal();renderAll();};$('restoreBtn').onclick=()=>$('restoreFile').click();$('restoreFile').onchange=async e=>{if(e.target.files[0]){try{await restoreBackup(e.target.files[0])}catch(err){alert('Restore failed: '+err.message)}}};$('clearAllBtn').onclick=async()=>{if(confirm('All V2 data will be deleted. Continue?')){for(const s of STORES)await clearStore(s);await seedIfEmpty();await loadAll();closeModal();renderAll()}}}
+async function backupJson(){
+  await loadAll();
+  const payload={version:2,exportedAt:new Date().toISOString(),stores:{}};
+  payload.stores.settings=await getAll('settings');
+  for(const s of STORES.filter(x=>x!=='settings'))payload.stores[s]=state.cache[s];
+  downloadText(`lemon-billing-backup-v2-${today()}.json`,JSON.stringify(payload,null,2),'application/json');
+}
+function normalizeBackupSettings(raw, salesRows, purchaseRows){
+  const defaults={id:'main',businessName:'LEMON TRADING',phone:'',address:'',openingStock:0,invoicePrefix:'INV'};
+  let rows=[];
+  if(Array.isArray(raw)) rows=raw.filter(x=>x&&typeof x==='object').map(x=>({...x}));
+  else if(raw&&typeof raw==='object') rows=[{...raw}];
+  const main=rows.find(x=>x.id==='main');
+  if(!main) rows.push({...defaults});
+  else Object.assign(main,defaults,main,{id:'main'});
+  const maxNumber=(rowsArr,field)=>{
+    let max=0;
+    for(const x of (Array.isArray(rowsArr)?rowsArr:[])){
+      const mt=String(x?.[field]||'').match(/(\d+)$/);
+      if(mt)max=Math.max(max,Number(mt[1]));
+    }
+    return max;
+  };
+  const ensureCounter=(id,max)=>{
+    const existing=rows.find(x=>x.id===id);
+    const minValue=max+1;
+    if(!existing) rows.push({id,value:minValue});
+    else existing.value=Math.max(Number(existing.value||0),minValue);
+  };
+  ensureCounter('counter_invoice',maxNumber(salesRows,'invoice'));
+  ensureCounter('counter_purchase',maxNumber(purchaseRows,'no'));
+  return rows;
+}
+function validateBackupRows(data){
+  if(!data||typeof data!=='object')throw new Error('Backup file is not a valid JSON object');
+  if(Number(data.version)!==2)throw new Error('Only V2 backup is supported');
+  if(!data.stores||typeof data.stores!=='object')throw new Error('Backup stores section is missing');
+  for(const s of STORES.filter(x=>x!=='settings')){
+    const rows=data.stores[s]??[];
+    if(!Array.isArray(rows))throw new Error(`Invalid ${s} data in backup`);
+    for(const row of rows)if(!row||typeof row!=='object'||!row.id)throw new Error(`Invalid row in ${s}`);
+  }
+}
+async function restoreBackup(file){
+  const text=await file.text();
+  let data;
+  try{data=JSON.parse(text)}catch(e){throw new Error('Backup file is not valid JSON')}
+  validateBackupRows(data);
+  const normalized={};
+  normalized.settings=normalizeBackupSettings(data.stores.settings,data.stores.sales||[],data.stores.purchases||[]);
+  for(const s of STORES.filter(x=>x!=='settings'))normalized[s]=data.stores[s]||[];
+  const ok=confirm(`Current app data will be replaced by this backup.\n\n${normalized.parties.length} parties, ${normalized.sales.length} sales, ${normalized.purchases.length} purchases, ${normalized.payments.length} payments will be restored. Continue?`);
+  if(!ok)return;
+  for(const s of STORES)await clearStore(s);
+  for(const row of normalized.settings)await put('settings',row);
+  for(const s of STORES.filter(x=>x!=='settings'))for(const row of normalized[s])await put(s,row);
+  await ensureMainSettings();
+  await loadAll();closeModal();renderAll();
+  alert('Backup restored successfully.');
+}
+function showSettings(){openModal('Settings & Data',`<div class="form"><label class="field">Business Name<input id="setName" value="${esc(state.cache.settings.businessName||'LEMON TRADING')}"></label><label class="field">Phone<input id="setPhone" value="${esc(state.cache.settings.phone||'')}"></label><label class="field">Address<input id="setAddress" value="${esc(state.cache.settings.address||'')}"></label><label class="field">Opening Stock (kg)<input id="setOpeningStock" type="number" step="0.001" value="${Number(state.cache.settings.openingStock||0)}"></label><div class="form-actions"><button class="secondary" id="saveSettings">Save Settings</button><button class="primary" id="restoreBtn">Restore Backup</button></div><input type="file" id="restoreFile" accept="application/json" hidden><div class="card"><div class="item"><div class="item-main"><div class="item-title">Data storage</div><div class="item-meta">IndexedDB · local-first · works offline after PWA cache</div></div></div><button class="secondary" id="clearAllBtn">Clear all data</button></div></div>`);$('saveSettings').onclick=async()=>{
+  const main={id:'main',
+    businessName:$('setName').value.trim()||'LEMON TRADING',
+    phone:$('setPhone').value.trim(),
+    address:$('setAddress').value.trim(),
+    openingStock:Number($('setOpeningStock').value||0),
+    invoicePrefix:state.cache.settings.invoicePrefix||'INV'
+  };
+  await put('settings',main);await loadAll();closeModal();renderAll();
+};$('restoreBtn').onclick=()=>$('restoreFile').click();$('restoreFile').onchange=async e=>{if(e.target.files[0]){try{await restoreBackup(e.target.files[0])}catch(err){alert('Restore failed: '+err.message)}}};$('clearAllBtn').onclick=async()=>{if(confirm('All V2 data will be deleted. Continue?')){for(const s of STORES)await clearStore(s);await seedIfEmpty();await loadAll();closeModal();renderAll()}}}
 
 $('fromDate').value=today();$('toDate').value=today();
-(async function init(){await seedIfEmpty();await loadAll();$('brandName').textContent='🍋 '+(state.cache.settings.businessName||'LEMON TRADING');renderAll()})();
+(async function init(){await seedIfEmpty();await ensureMainSettings();await loadAll();$('brandName').textContent='🍋 '+(state.cache.settings.businessName||'LEMON TRADING');renderAll()})();

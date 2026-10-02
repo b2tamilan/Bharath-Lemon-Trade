@@ -68,3 +68,10 @@ This is a functional local-first V2 application. Data is stored in the browser's
 - Edit keeps the original invoice / purchase number.
 - Amount received/paid that was auto-created with the transaction is updated or removed when the source transaction is edited/deleted. Manual ledger payments remain separate.
 - Purchase and Sale edit/delete actions include stock-safety checks so the resulting stock does not go negative.
+
+## V2.3 Restore Fix
+- Fixes the V2 backup restore `Symbol.iterator` error caused by treating the single settings object as an array.
+- Accepts both corrected V2 backups (settings array) and older V2 backups where settings was exported as one object.
+- Recreates the `main` settings row when missing.
+- Rebuilds missing invoice/purchase counters from restored transaction numbers.
+- Backup now exports every settings row.
